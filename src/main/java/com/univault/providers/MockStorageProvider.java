@@ -23,7 +23,7 @@ public class MockStorageProvider implements StorageProvider {
     private volatile boolean healthy = true;
 
     public MockStorageProvider() {
-        this(0.1, 150, 15L * 1024 * 1024 * 1024);
+        this(0.9, 150, 15L * 1024 * 1024 * 1024);
     }
 
     public MockStorageProvider(double failureRate, long simulatedLatencyMs, long totalSpaceBytes) {
