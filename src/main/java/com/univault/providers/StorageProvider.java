@@ -6,6 +6,7 @@ public interface StorageProvider {
 
     String uploadChunk(String providerFileId, byte[] data);
 
+
     InputStream downloadChunk(String providerFileId);
 
     boolean deleteChunk(String providerFileId);
