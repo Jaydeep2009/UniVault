@@ -1,4 +1,10 @@
 package com.univault.storage.dto;
 
-public class StorageStatsResponse {
-}
+import java.util.List;
+
+public record StorageStatsResponse(
+        long totalQuotaBytes,
+        long usedQuotaBytes,
+        long availableQuotaBytes,
+        List<AccountStorageStats> accounts
+) {}
