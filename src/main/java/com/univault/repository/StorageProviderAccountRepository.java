@@ -7,7 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 import java.util.UUID;
 
-public interface StorageProviderAccountRepository extends JpaRepository<StorageProviderAccount, Long> {
+public interface StorageProviderAccountRepository extends JpaRepository<StorageProviderAccount, UUID> {
     List<StorageProviderAccount> findByUserId(UUID userId);
-    List<StorageProviderAccount> findByUserIdAndStatus(Long userId, AccountStatus status);
+    List<StorageProviderAccount> findByUserIdAndStatus(UUID userId, AccountStatus status);
 }

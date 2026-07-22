@@ -44,8 +44,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             if (jwtService.isTokenValid(token)) {
                 UUID userId = jwtService.extractUserId(token);
 
-                // principal = userId directly, no roles yet — every
-                // authenticated user has equal access for now
                 var authentication = new UsernamePasswordAuthenticationToken(
                         userId, null, List.of());
                 SecurityContextHolder.getContext().setAuthentication(authentication);

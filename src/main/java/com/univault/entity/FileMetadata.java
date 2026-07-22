@@ -1,10 +1,9 @@
 package com.univault.entity;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.UuidGenerator;
+import lombok.AllArgsConstructor;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -17,7 +16,7 @@ import java.util.UUID;
 public class FileMetadata {
 
     @Id
-    @UuidGenerator
+    @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
     @ManyToOne(fetch = FetchType.LAZY)

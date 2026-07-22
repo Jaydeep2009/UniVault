@@ -1,10 +1,9 @@
 package com.univault.entity;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.UuidGenerator;
+import lombok.AllArgsConstructor;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -17,16 +16,16 @@ import java.util.UUID;
 public class Folder {
 
     @Id
-    @UuidGenerator
+    @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "parent_folder_id")
+    private Folder parentFolder;   // self-referencing, unchanged structurally
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "parent_folder_id")
-    private Folder parentFolder; // nullable — null means root-level folder
 
     @Column(nullable = false)
     private String name;

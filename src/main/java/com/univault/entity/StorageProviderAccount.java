@@ -2,10 +2,9 @@ package com.univault.entity;
 
 import com.univault.providers.ProviderType;
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.UuidGenerator;
+import lombok.AllArgsConstructor;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -18,12 +17,12 @@ import java.util.UUID;
 public class StorageProviderAccount {
 
     @Id
-    @UuidGenerator
+    @GeneratedValue(strategy = GenerationType.UUID)  // Hibernate 6+, generates via app, no DB extension needed
     private UUID id;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
-    private User user;
+    private User user;   // unchanged — FK reference type follows User's new id automatically
 
     @Enumerated(EnumType.STRING)
     @Column(name = "provider_type", nullable = false)
