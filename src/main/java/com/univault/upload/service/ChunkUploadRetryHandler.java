@@ -12,8 +12,6 @@ import org.springframework.stereotype.Component;
 @Slf4j
 public class ChunkUploadRetryHandler {
 
-    private final StorageProvider storageProvider;
-
     @Value("${univault.upload.max-retries:3}")
     private int maxRetries;
 
@@ -25,13 +23,14 @@ public class ChunkUploadRetryHandler {
      * Returns the providerFileId and how many attempts it took on success.
      * Throws ChunkUploadFailedException (carrying attempt count) if all attempts fail.
      */
-    public RetryResult uploadWithRetry(byte[] data) {
+    public RetryResult uploadWithRetry(StorageProvider storageProvider, String providerFileId, byte[] data) {
         Exception lastException = null;
 
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             try {
-                String providerFileId = storageProvider.uploadChunk(null, data);
-                return new RetryResult(providerFileId, attempt);
+                //String providerFileId = storageProvider.uploadChunk(null, data);
+                String returnedId = storageProvider.uploadChunk(providerFileId, data);
+                return new RetryResult(returnedId, attempt);
             } catch (Exception e) {
                 lastException = e;
                 log.warn("Chunk upload attempt {} failed: {}", attempt + 1, e.getMessage());

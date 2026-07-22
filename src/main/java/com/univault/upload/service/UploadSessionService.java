@@ -5,6 +5,9 @@ import com.univault.common.exception.ChunkUploadFailedException;
 import com.univault.common.exception.InsufficientStorageException;
 import com.univault.common.util.ChecksumUtil;
 import com.univault.common.util.MimeTypeUtil;
+import com.univault.entity.StorageProviderAccount;
+import com.univault.providers.ProviderFactory;
+import com.univault.providers.StorageProvider;
 import com.univault.storage.StoragePoolManager;
 import com.univault.upload.dto.ChunkUploadResponse;
 import com.univault.upload.dto.UploadCompleteResponse;
@@ -23,8 +26,8 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+
 
 @Service
 @RequiredArgsConstructor
@@ -34,13 +37,14 @@ public class UploadSessionService {
     private final ChunkRepository chunkRepository;
     private final ChunkUploadRetryHandler retryHandler;
     private final StoragePoolManager storagePoolManager;
+    private final ProviderFactory providerFactory;
 
     @Value("${univault.chunk.size-bytes:4194304}")
     private int chunkSizeBytes;
 
-    public UploadInitResponse initUpload(UploadInitRequest request) {
+    public UploadInitResponse initUpload(UploadInitRequest request, UUID userId) {
         // TODO: replace with real userId once JWT principal is wired in (Member 1's auth)
-        UUID userId = UUID.randomUUID(); // placeholder — every init currently looks like a different user
+        //UUID userId = UUID.randomUUID(); // placeholder — every init currently looks like a different user
 
         long declaredSize = request.getFileSize();
         long availableSpace = storagePoolManager.getAvailableSpaceBytes(userId);
@@ -123,16 +127,25 @@ public class UploadSessionService {
 
         chunk.setSize(data.length);
         chunk.setChecksum(actualChecksum);
+        StorageProviderAccount account = storagePoolManager
+                .selectAccountForChunk(file.getUserId(), data.length)
+                .orElseThrow(() -> new InsufficientStorageException(
+                        "No connected account has room for this chunk"));
+
+        StorageProvider provider = providerFactory.getProvider(account);
+        String providerFileId = fileId + "-chunk-" + serialNumber;
 
         try {
-            ChunkUploadRetryHandler.RetryResult result = retryHandler.uploadWithRetry(data);
+            ChunkUploadRetryHandler.RetryResult result = retryHandler.uploadWithRetry(provider, providerFileId, data);
             chunk.setProviderFileId(result.providerFileId());
+            chunk.setProviderId(account.getId());   // ChunkEntity field confirmed above
             chunk.setStatus(ChunkStatus.COMPLETE);
             chunk.setRetryCount(result.retriesUsed());
         } catch (ChunkUploadFailedException e) {
             chunk.setStatus(ChunkStatus.FAILED);
             chunk.setRetryCount(e.getAttemptsMade());
         }
+
 
         chunkRepository.save(chunk);
 
@@ -149,12 +162,12 @@ public class UploadSessionService {
         List<Integer> uploadedSerials = chunks.stream()
                 .filter(c -> c.getStatus() == ChunkStatus.COMPLETE)
                 .map(ChunkEntity::getSerialNumber)
-                .collect(Collectors.toList());
+                .toList();
 
         List<Integer> missing = IntStream.range(0, file.getTotalChunks())
                 .filter(i -> !uploadedSerials.contains(i))
                 .boxed()
-                .collect(Collectors.toList());
+                .toList();
 
         if (missing.isEmpty()) {
             long actualTotalSize = chunks.stream()
