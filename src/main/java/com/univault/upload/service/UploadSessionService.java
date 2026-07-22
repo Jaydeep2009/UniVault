@@ -8,6 +8,7 @@ import com.univault.common.util.MimeTypeUtil;
 import com.univault.entity.StorageProviderAccount;
 import com.univault.providers.ProviderFactory;
 import com.univault.providers.StorageProvider;
+import com.univault.repository.StorageProviderAccountRepository;
 import com.univault.storage.StoragePoolManager;
 import com.univault.upload.dto.ChunkUploadResponse;
 import com.univault.upload.dto.UploadCompleteResponse;
@@ -38,6 +39,7 @@ public class UploadSessionService {
     private final ChunkUploadRetryHandler retryHandler;
     private final StoragePoolManager storagePoolManager;
     private final ProviderFactory providerFactory;
+    private final StorageProviderAccountRepository accountRepository;
 
     @Value("${univault.chunk.size-bytes:4194304}")
     private int chunkSizeBytes;
@@ -141,6 +143,11 @@ public class UploadSessionService {
             chunk.setProviderId(account.getId());   // ChunkEntity field confirmed above
             chunk.setStatus(ChunkStatus.COMPLETE);
             chunk.setRetryCount(result.retriesUsed());
+
+            account.setUsedQuotaBytes(
+                    (account.getUsedQuotaBytes() != null ? account.getUsedQuotaBytes() : 0L) + data.length);
+            // accountRepository not currently injected in UploadSessionService — add it
+            accountRepository.save(account);
         } catch (ChunkUploadFailedException e) {
             chunk.setStatus(ChunkStatus.FAILED);
             chunk.setRetryCount(e.getAttemptsMade());
@@ -148,6 +155,7 @@ public class UploadSessionService {
 
 
         chunkRepository.save(chunk);
+
 
         return new ChunkUploadResponse(fileId, serialNumber, chunk.getStatus().name(), actualChecksum);
     }
