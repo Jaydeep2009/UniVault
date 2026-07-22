@@ -21,7 +21,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
-
+import java.util.UUID;
 
 
 @RestController
@@ -117,7 +117,7 @@ public class ProviderConnectionController {
             );
         }
 
-        User user = userRepository.findById(Long.parseLong(userId))
+        User user = userRepository.findById(UUID.fromString(userId))
                 .orElseThrow(() -> new IllegalStateException("User not found: " + userId));
 
         StorageProviderAccount account = new StorageProviderAccount();
@@ -140,14 +140,14 @@ public class ProviderConnectionController {
     }
 
     @DeleteMapping("/{accountId}")
-    public ResponseEntity<Void> disconnect(@PathVariable Long accountId, Authentication authentication) {
+    public ResponseEntity<Void> disconnect(@PathVariable UUID accountId, Authentication authentication) {
 
         StorageProviderAccount account = accountRepository.findById(accountId)
                 .orElseThrow(() -> new IllegalStateException("Account not found: " + accountId));
 
         // Soft-delete only — never hard-delete an account chunks may still reference.
         account.setStatus(StorageProviderAccount.AccountStatus.DISCONNECTED);
-        if (!account.getUser().getId().equals(Long.parseLong(authentication.getName()))) {
+        if (!account.getUser().getId().equals(UUID.fromString(authentication.getName()))) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
         accountRepository.save(account);

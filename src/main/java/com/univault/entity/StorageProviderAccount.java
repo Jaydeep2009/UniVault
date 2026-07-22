@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
 
 import java.time.Instant;
+import java.util.UUID;
 
 @Entity
 @Table(name = "storage_provider_accounts")
@@ -16,12 +17,12 @@ import java.time.Instant;
 public class StorageProviderAccount {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @GeneratedValue(strategy = GenerationType.UUID)  // Hibernate 6+, generates via app, no DB extension needed
+    private UUID id;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
-    private User user;
+    private User user;   // unchanged — FK reference type follows User's new id automatically
 
     @Enumerated(EnumType.STRING)
     @Column(name = "provider_type", nullable = false)

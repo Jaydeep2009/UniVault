@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import javax.crypto.SecretKey;
 import java.util.Base64;
 import java.util.Date;
+import java.util.UUID;
 
 /**
  * Generates and validates JWTs. This is the only class that ever touches
@@ -31,17 +32,24 @@ public class JwtService {
     }
 
     /** Called once at login/signup — issues a new signed token for this user. */
+    /** Called once at login/signup — issues a new signed token for this user. */
     public String generateToken(User user) {
         Date now = new Date();
         Date expiry = new Date(now.getTime() + EXPIRATION_MS);
 
         return Jwts.builder()
-                .subject(String.valueOf(user.getId()))
+                .subject(user.getId().toString())
                 .claim("email", user.getEmail())
                 .issuedAt(now)
                 .expiration(expiry)
                 .signWith(key)
                 .compact();
+    }
+
+    /** Only call this after isTokenValid() has returned true. */
+    public UUID extractUserId(String token) {
+        Claims claims = parseClaims(token);
+        return UUID.fromString(claims.getSubject());
     }
 
     /** Called on every request — false for a bad signature, tampering, or expiry. */
@@ -55,11 +63,6 @@ public class JwtService {
         }
     }
 
-    /** Only call this after isTokenValid() has returned true. */
-    public Long extractUserId(String token) {
-        Claims claims = parseClaims(token);
-        return Long.valueOf(claims.getSubject());
-    }
 
     private Claims parseClaims(String token) {
         return Jwts.parser()

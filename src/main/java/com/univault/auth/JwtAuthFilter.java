@@ -13,6 +13,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Runs once per incoming request, before it reaches any controller.
@@ -41,10 +42,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             String token = header.substring(7);
 
             if (jwtService.isTokenValid(token)) {
-                Long userId = jwtService.extractUserId(token);
+                UUID userId = jwtService.extractUserId(token);
 
-                // principal = userId directly, no roles yet — every
-                // authenticated user has equal access for now
                 var authentication = new UsernamePasswordAuthenticationToken(
                         userId, null, List.of());
                 SecurityContextHolder.getContext().setAuthentication(authentication);
