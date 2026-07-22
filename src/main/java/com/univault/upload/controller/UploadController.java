@@ -9,8 +9,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.security.core.Authentication;
 
 import java.io.IOException;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/upload")
@@ -19,9 +21,14 @@ public class UploadController {
 
     private final UploadSessionService uploadSessionService;
 
+//    @PostMapping("/init")
+//    public ResponseEntity<UploadInitResponse> init(@RequestBody UploadInitRequest request) {
+//        UploadInitResponse response = uploadSessionService.initUpload(request);
+//        return ResponseEntity.ok(response);
+//    }
     @PostMapping("/init")
-    public ResponseEntity<UploadInitResponse> init(@RequestBody UploadInitRequest request) {
-        UploadInitResponse response = uploadSessionService.initUpload(request);
+    public ResponseEntity<UploadInitResponse> init(@RequestBody UploadInitRequest request, Authentication authentication) {
+        UploadInitResponse response = uploadSessionService.initUpload(request, (UUID) authentication.getPrincipal());
         return ResponseEntity.ok(response);
     }
 
@@ -30,7 +37,8 @@ public class UploadController {
             @RequestParam("fileId") String fileId,
             @RequestParam("serialNumber") int serialNumber,
             @RequestParam(value = "checksum", required = false) String checksum,
-            @RequestParam("file") MultipartFile chunkFile) throws IOException {
+            @RequestParam("file") MultipartFile chunkFile,
+            Authentication authentication) throws IOException {
 
         byte[] data = chunkFile.getBytes();
         String actualFileName = chunkFile.getOriginalFilename();
