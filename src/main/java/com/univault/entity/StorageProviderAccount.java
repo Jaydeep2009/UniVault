@@ -5,6 +5,7 @@ import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.UuidGenerator;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -17,7 +18,7 @@ import java.util.UUID;
 public class StorageProviderAccount {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @UuidGenerator
     private UUID id;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -31,17 +32,20 @@ public class StorageProviderAccount {
     @Column(name = "account_label")
     private String accountLabel;
 
+    //@Column(name = "auth_type", nullable = false)
+    //private String authType; // see AuthType constants: OAUTH2, STATIC_KEY
+    @Enumerated(EnumType.STRING)
     @Column(name = "auth_type", nullable = false)
-    private String authType; // see AuthType constants: OAUTH2, STATIC_KEY
+    private AuthType authType;
 
     // --- TEMP: plain columns until EncryptedStringConverter exists (Step D) ---
     // TODO: uncomment @Convert lines and remove plain @Column below once
     // com.univault.security.EncryptedStringConverter is written.
-    // @Convert(converter = com.univault.security.EncryptedStringConverter.class)
+    @Convert(converter = com.univault.security.EncryptedStringConverter.class)
     @Column(name = "access_token", columnDefinition = "TEXT")
     private String accessToken;
 
-    // @Convert(converter = com.univault.security.EncryptedStringConverter.class)
+    @Convert(converter = com.univault.security.EncryptedStringConverter.class)
     @Column(name = "refresh_token", columnDefinition = "TEXT")
     private String refreshToken;
 
@@ -71,7 +75,9 @@ public class StorageProviderAccount {
             this.status = AccountStatus.ACTIVE;
         }
     }
-
+    public enum AuthType {
+        OAUTH2, STATIC_KEY
+    }
     public enum AccountStatus {
         ACTIVE, EXPIRED, ERROR, DISCONNECTED
     }

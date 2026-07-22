@@ -1,0 +1,157 @@
+package com.univault.providers;
+
+import com.google.api.client.auth.oauth2.TokenResponse;
+import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeFlow;
+import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeTokenRequest;
+import com.google.api.client.googleapis.auth.oauth2.GoogleClientSecrets;
+import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.api.client.json.gson.GsonFactory;
+import com.univault.entity.StorageProviderAccount;
+import com.univault.entity.User;
+import com.univault.repository.StorageProviderAccountRepository;
+import com.univault.repository.UserRepository;
+import com.univault.security.AesGcmService;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.*;
+
+import java.io.IOException;
+import java.time.Instant;
+import java.util.Collections;
+import java.util.List;
+
+
+
+@RestController
+@RequestMapping("/providers/google")
+public class ProviderConnectionController {
+
+    private final StorageProviderAccountRepository accountRepository;
+    private final UserRepository userRepository;
+    private final String clientId;
+    private final String clientSecret;
+    private final String redirectUri;
+
+
+    private static final List<String> SCOPES =
+            Collections.singletonList("https://www.googleapis.com/auth/drive.file");
+
+    public ProviderConnectionController(
+            StorageProviderAccountRepository accountRepository,
+            UserRepository userRepository,
+            @Value("${GOOGLE_CLIENT_ID}") String clientId,
+            @Value("${GOOGLE_CLIENT_SECRET}") String clientSecret,
+            @Value("${GOOGLE_REDIRECT_URI}") String redirectUri) {
+        this.accountRepository = accountRepository;
+        this.userRepository = userRepository;
+        this.clientId = clientId;
+        this.clientSecret = clientSecret;
+        this.redirectUri = redirectUri;
+    }
+
+    private GoogleAuthorizationCodeFlow buildFlow() throws IOException {
+        GoogleClientSecrets.Details details = new GoogleClientSecrets.Details();
+        details.setClientId(clientId);
+        details.setClientSecret(clientSecret);
+        GoogleClientSecrets secrets = new GoogleClientSecrets().setWeb(details);
+
+        return new GoogleAuthorizationCodeFlow.Builder(
+                new NetHttpTransport(),
+                GsonFactory.getDefaultInstance(),
+                secrets,
+                SCOPES)
+                .setAccessType("offline")   // required to get a refresh token
+                .build();
+    }
+
+    @GetMapping("/authorize")
+    public ResponseEntity<Void> authorize(Authentication authentication) throws IOException {
+        // "state" carries the authenticated user's id through the redirect round-trip,
+        // since Google's callback hits us with no auth context of its own.
+        String userId = authentication.getName();
+
+        String url = buildFlow().newAuthorizationUrl()
+                .setRedirectUri(redirectUri)
+                .setState(userId)
+                .set("prompt", "consent")   // forces refresh_token on repeat connects too
+                .build();
+
+        return ResponseEntity.status(HttpStatus.FOUND)
+                .header("Location", url)
+                .build();
+    }
+
+    @GetMapping("/callback")
+    public ResponseEntity<String> callback(
+            @RequestParam("code") String code,
+            @RequestParam("state") String userId,
+            @RequestParam(value = "error", required = false) String error) throws IOException {
+
+        if (error != null) {
+            return ResponseEntity.badRequest().body("Google OAuth error: " + error);
+        }
+
+        GoogleAuthorizationCodeTokenRequest tokenRequest = new GoogleAuthorizationCodeTokenRequest(
+                new NetHttpTransport(),
+                GsonFactory.getDefaultInstance(),
+                clientId,
+                clientSecret,
+                code,
+                redirectUri);
+
+        TokenResponse tokenResponse = tokenRequest.execute();
+
+        String accessToken = tokenResponse.getAccessToken();
+        String refreshToken = tokenResponse.getRefreshToken();
+        Long expiresInSeconds = tokenResponse.getExpiresInSeconds();
+
+        if (refreshToken == null) {
+            // Happens if the user already granted consent before and Google skips issuing
+            // a new refresh token. The "prompt=consent" param above guards against this,
+            // but worth surfacing clearly if it still happens.
+            return ResponseEntity.badRequest().body(
+                    "No refresh token returned — user may need to revoke prior access at " +
+                            "myaccount.google.com/permissions and reconnect."
+            );
+        }
+
+        User user = userRepository.findById(Long.parseLong(userId))
+                .orElseThrow(() -> new IllegalStateException("User not found: " + userId));
+
+        StorageProviderAccount account = new StorageProviderAccount();
+        account.setUser(user);
+        account.setProviderType(ProviderType.GOOGLE_DRIVE);
+        account.setAuthType(StorageProviderAccount.AuthType.OAUTH2);
+        account.setAccessToken(AesGcmService.encrypt(accessToken));
+        account.setRefreshToken(AesGcmService.encrypt(refreshToken));
+        account.setTokenExpiresAt(
+                expiresInSeconds != null
+                        ? Instant.now().plusSeconds(expiresInSeconds)
+                        : null
+        );
+        account.setStatus(StorageProviderAccount.AccountStatus.ACTIVE);
+        account.setLastHealthCheckAt(Instant.now());
+
+        accountRepository.save(account);
+
+        return ResponseEntity.ok("Google Drive account connected successfully.");
+    }
+
+    @DeleteMapping("/{accountId}")
+    public ResponseEntity<Void> disconnect(@PathVariable Long accountId, Authentication authentication) {
+
+        StorageProviderAccount account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new IllegalStateException("Account not found: " + accountId));
+
+        // Soft-delete only — never hard-delete an account chunks may still reference.
+        account.setStatus(StorageProviderAccount.AccountStatus.DISCONNECTED);
+        if (!account.getUser().getId().equals(Long.parseLong(authentication.getName()))) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        accountRepository.save(account);
+
+        return ResponseEntity.noContent().build();
+    }
+}
