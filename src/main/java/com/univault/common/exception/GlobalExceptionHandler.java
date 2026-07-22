@@ -2,6 +2,8 @@ package com.univault.common.exception;
 
 
 
+import com.univault.upload.exception.ChunkUploadFailedException;
+import com.univault.upload.exception.InsufficientStorageException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

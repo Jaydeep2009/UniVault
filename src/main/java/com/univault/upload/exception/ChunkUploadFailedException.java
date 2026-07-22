@@ -1,4 +1,4 @@
-package com.univault.common.exception;
+package com.univault.upload.exception;
 
 public class ChunkUploadFailedException extends RuntimeException {
 

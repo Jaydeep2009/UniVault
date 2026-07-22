@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.util.concurrent.CompletableFuture;
 
 @RestController
 @RequestMapping("/api/upload")
@@ -25,8 +26,14 @@ public class UploadController {
         return ResponseEntity.ok(response);
     }
 
+    // Returning CompletableFuture here (instead of ResponseEntity directly) is
+    // what actually delivers the parallel-upload win: Spring MVC detaches this
+    // request from its Tomcat thread the moment the future is returned, and
+    // re-dispatches to write the response only once it completes. Multiple
+    // /chunk requests -- including ones sitting in retry backoff -- no longer
+    // each pin a servlet thread for the duration of the upload.
     @PostMapping(value = "/chunk", consumes = "multipart/form-data")
-    public ResponseEntity<ChunkUploadResponse> uploadChunk(
+    public CompletableFuture<ResponseEntity<ChunkUploadResponse>> uploadChunk(
             @RequestParam("fileId") String fileId,
             @RequestParam("serialNumber") int serialNumber,
             @RequestParam(value = "checksum", required = false) String checksum,
@@ -35,9 +42,8 @@ public class UploadController {
         byte[] data = chunkFile.getBytes();
         String actualFileName = chunkFile.getOriginalFilename();
 
-        ChunkUploadResponse response = uploadSessionService.uploadChunk(
-                fileId, serialNumber, data, checksum, actualFileName);
-        return ResponseEntity.ok(response);
+        return uploadSessionService.uploadChunk(fileId, serialNumber, data, checksum, actualFileName)
+                .thenApply(ResponseEntity::ok);
     }
 
     @PostMapping("/complete")
