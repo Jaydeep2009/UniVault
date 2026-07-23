@@ -51,7 +51,7 @@ public class JwtService {
             parseClaims(token);
             return true;
         } catch (Exception e) {
-            // covers ExpiredJwtException, SignatureException, MalformedJwtException, etc.
+            System.out.println("JWT VALIDATION FAILED: " + e.getClass().getSimpleName() + " - " + e.getMessage());
             return false;
         }
     }
