@@ -13,6 +13,7 @@ import com.google.api.client.json.gson.GsonFactory;
 import com.google.api.services.drive.Drive;
 import com.google.api.services.drive.model.About;
 import com.google.api.services.drive.model.File;
+import com.google.auth.oauth2.UserCredentials;
 import com.univault.entity.StorageProviderAccount;
 import com.univault.repository.StorageProviderAccountRepository;
 import org.springframework.beans.factory.annotation.Value;
@@ -57,11 +58,28 @@ public class GoogleDriveProvider implements StorageProvider {
      * if the token was refreshed since construction, a cached client would keep using the
      * stale access token until the instance was thrown away.
      */
+    /*
     private Drive buildDriveClient() {
         refreshTokenIfExpired();
 
         AccessToken accessToken = new AccessToken(account.getAccessToken(), null); // null = no known expiry on this object; we manage expiry ourselves via tokenExpiresAt
         GoogleCredentials credentials = GoogleCredentials.create(accessToken);
+        HttpCredentialsAdapter credentialsAdapter = new HttpCredentialsAdapter(credentials);
+
+        return new Drive.Builder(HTTP_TRANSPORT, JSON_FACTORY, credentialsAdapter)
+                .setApplicationName("UniVault")
+                .build();
+    }*/
+    private Drive buildDriveClient() {
+        refreshTokenIfExpired(); // keep this — still useful as a proactive refresh
+
+        UserCredentials credentials = UserCredentials.newBuilder()
+                .setClientId(clientId)
+                .setClientSecret(clientSecret)
+                .setRefreshToken(account.getRefreshToken())
+                .setAccessToken(new AccessToken(account.getAccessToken(), null))
+                .build();
+
         HttpCredentialsAdapter credentialsAdapter = new HttpCredentialsAdapter(credentials);
 
         return new Drive.Builder(HTTP_TRANSPORT, JSON_FACTORY, credentialsAdapter)
@@ -92,6 +110,21 @@ public class GoogleDriveProvider implements StorageProvider {
         } catch (IOException e) {
             throw new IllegalStateException(
                     "Failed to refresh Google Drive token for account " + account.getId(), e);
+        }
+    }
+    public record QuotaInfo(long totalBytes, long usedBytes) {}
+
+    public QuotaInfo fetchQuota() {
+        try {
+            Drive drive = buildDriveClient();
+            About about = drive.about().get().setFields("storageQuota").execute();
+            About.StorageQuota quota = about.getStorageQuota();
+
+            long total = quota.getLimit() != null ? quota.getLimit() : Long.MAX_VALUE;
+            long used = quota.getUsage() != null ? quota.getUsage() : 0L;
+            return new QuotaInfo(total, used);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to fetch Google Drive quota for account " + account.getId(), e);
         }
     }
 
@@ -194,5 +227,6 @@ public class GoogleDriveProvider implements StorageProvider {
         public GoogleDriveProvider create(StorageProviderAccount account) {
             return new GoogleDriveProvider(account, accountRepository, clientId, clientSecret);
         }
+
     }
 }
