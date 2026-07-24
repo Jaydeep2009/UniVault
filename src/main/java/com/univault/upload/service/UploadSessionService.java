@@ -1,4 +1,3 @@
-
 package com.univault.upload.service;
 
 import com.univault.common.util.ChecksumUtil;
@@ -6,6 +5,7 @@ import com.univault.common.util.MimeTypeUtil;
 import com.univault.entity.StorageProviderAccount;
 import com.univault.providers.ProviderFactory;
 import com.univault.providers.StorageProvider;
+import com.univault.repository.StorageProviderAccountRepository;
 import com.univault.storage.StoragePoolManager;
 import com.univault.upload.dto.ChunkUploadResponse;
 import com.univault.upload.dto.UploadCompleteResponse;
@@ -26,6 +26,8 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.stream.IntStream;
 
 @Service
@@ -37,14 +39,12 @@ public class UploadSessionService {
     private final ChunkUploadRetryHandler retryHandler;
     private final StoragePoolManager storagePoolManager;
     private final ProviderFactory providerFactory;
+    private final StorageProviderAccountRepository accountRepository;
 
     @Value("${univault.chunk.size-bytes:4194304}")
     private int chunkSizeBytes;
 
     public UploadInitResponse initUpload(UploadInitRequest request, UUID userId) {
-        // TODO: replace with real userId once JWT principal is wired in (Member 1's auth)
-        //UUID userId = UUID.randomUUID(); // placeholder — every init currently looks like a different user
-
         long declaredSize = request.getFileSize();
         long availableSpace = storagePoolManager.getAvailableSpaceBytes(userId);
 
@@ -69,8 +69,21 @@ public class UploadSessionService {
         return new UploadInitResponse(file.getId().toString(), expectedChunks, chunkSizeBytes);
     }
 
-    public ChunkUploadResponse uploadChunk(String fileId, int serialNumber, byte[] data,
-                                           String clientChecksum, String actualFileName) {
+    /**
+     * Returns CompletableFuture<ChunkUploadResponse> instead of blocking.
+     * Everything through account selection is unchanged and still runs
+     * synchronously on the calling thread — it's cheap (DB reads, a
+     * checksum, StoragePoolManager's account pick). Only the actual
+     * provider upload + retry is async, via ChunkUploadRetryHandler.
+     * Synchronous early-return paths (checksum mismatch) are wrapped with
+     * CompletableFuture.completedFuture() for a consistent return type.
+     *
+     * Preserves original behavior: ChunkUploadFailedException (retries
+     * exhausted) is still caught here and turned into a normal FAILED
+     * response, never rethrown to the controller.
+     */
+    public CompletableFuture<ChunkUploadResponse> uploadChunk(String fileId, int serialNumber, byte[] data,
+                                                              String clientChecksum, String actualFileName) {
         UUID fileUuid = UUID.fromString(fileId);
         FileEntity file = fileRepository.findById(fileUuid)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown fileId: " + fileId));
@@ -106,7 +119,8 @@ public class UploadSessionService {
         if (clientChecksum != null && !clientChecksum.equals(actualChecksum)) {
             chunk.setStatus(ChunkStatus.FAILED);
             chunkRepository.save(chunk);
-            return new ChunkUploadResponse(fileId, serialNumber, "FAILED", actualChecksum);
+            return CompletableFuture.completedFuture(
+                    new ChunkUploadResponse(fileId, serialNumber, "FAILED", actualChecksum));
         }
 
         // Enforce declared size as a ceiling — catches a client sending far more
@@ -126,6 +140,10 @@ public class UploadSessionService {
 
         chunk.setSize(data.length);
         chunk.setChecksum(actualChecksum);
+
+        // Per-chunk account selection — this is what makes multi-account
+        // pooling real: different chunks of the same file can resolve to
+        // different connected accounts depending on available space.
         StorageProviderAccount account = storagePoolManager
                 .selectAccountForChunk(file.getUserId(), data.length)
                 .orElseThrow(() -> new InsufficientStorageException(
@@ -134,21 +152,36 @@ public class UploadSessionService {
         StorageProvider provider = providerFactory.getProvider(account);
         String providerFileId = fileId + "-chunk-" + serialNumber;
 
-        try {
-            ChunkUploadRetryHandler.RetryResult result = retryHandler.uploadWithRetry(provider, providerFileId, data);
-            chunk.setProviderFileId(result.providerFileId());
-            chunk.setProviderId(account.getId());   // ChunkEntity field confirmed above
-            chunk.setStatus(ChunkStatus.COMPLETE);
-            chunk.setRetryCount(result.retriesUsed());
-        } catch (ChunkUploadFailedException e) {
-            chunk.setStatus(ChunkStatus.FAILED);
-            chunk.setRetryCount(e.getAttemptsMade());
+        return retryHandler.uploadWithRetry(provider, providerFileId, data)
+                .handle((result, error) -> {
+                    if (error == null) {
+                        chunk.setProviderFileId(result.providerFileId());
+                        chunk.setProviderId(account.getId());
+                        chunk.setStatus(ChunkStatus.COMPLETE);
+                        chunk.setRetryCount(result.retriesUsed());
+
+                        account.setUsedQuotaBytes(
+                                (account.getUsedQuotaBytes() != null ? account.getUsedQuotaBytes() : 0L) + data.length);
+                        accountRepository.save(account);
+                    } else {
+                        Throwable cause = unwrap(error);
+                        chunk.setStatus(ChunkStatus.FAILED);
+                        chunk.setRetryCount(
+                                cause instanceof ChunkUploadFailedException cufe ? cufe.getAttemptsMade() : -1);
+                    }
+                    chunkRepository.save(chunk);
+                    return new ChunkUploadResponse(fileId, serialNumber, chunk.getStatus().name(), actualChecksum);
+                });
+    }
+
+    // CompletableFuture wraps async-stage exceptions in CompletionException,
+    // possibly nested through the retry handler's recursive backoff chain —
+    // unwrap down to the real cause (e.g. ChunkUploadFailedException).
+    private static Throwable unwrap(Throwable t) {
+        while (t instanceof CompletionException && t.getCause() != null) {
+            t = t.getCause();
         }
-
-
-        chunkRepository.save(chunk);
-
-        return new ChunkUploadResponse(fileId, serialNumber, chunk.getStatus().name(), actualChecksum);
+        return t;
     }
 
     public UploadCompleteResponse completeUpload(String fileId) {
