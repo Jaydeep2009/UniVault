@@ -83,10 +83,14 @@ public class UploadSessionService {
      * response, never rethrown to the controller.
      */
     public CompletableFuture<ChunkUploadResponse> uploadChunk(String fileId, int serialNumber, byte[] data,
-                                                              String clientChecksum, String actualFileName) {
+                                                              String clientChecksum, String actualFileName, UUID callerId) {
         UUID fileUuid = UUID.fromString(fileId);
         FileEntity file = fileRepository.findById(fileUuid)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown fileId: " + fileId));
+
+        if (!file.getUserId().equals(callerId)) {
+            throw new IllegalArgumentException("Unknown fileId: " + fileId); // or a dedicated 403/404
+        }
 
         if (serialNumber < 0 || serialNumber >= file.getTotalChunks()) {
             throw new IllegalArgumentException(

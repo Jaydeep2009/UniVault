@@ -54,7 +54,7 @@ public class UploadController {
                 "Chunk " + serialNumber +
                         ", MD5 = " + ChecksumUtil.computeMd5(data)
         );
-        return uploadSessionService.uploadChunk(fileId, serialNumber, data, checksum, actualFileName)
+        return uploadSessionService.uploadChunk(fileId, serialNumber, data, checksum, actualFileName,(UUID) authentication.getPrincipal())
                 .thenApply(ResponseEntity::ok);
     }
 
