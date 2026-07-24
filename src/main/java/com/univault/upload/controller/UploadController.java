@@ -44,12 +44,7 @@ public class UploadController {
         byte[] data = chunkFile.getBytes();
         String actualFileName = chunkFile.getOriginalFilename();
 
-        // NOTE: authentication isn't passed into uploadSessionService.uploadChunk()
-        // below — the service currently trusts whatever fileId the caller sends,
-        // without checking it actually belongs to this authenticated user. Not a
-        // regression from this change, just flagging it's still open: right now
-        // any authenticated user could POST chunks against someone else's fileId.
-        // Worth an ownership check in UploadSessionService before this goes live.
+
         System.out.println(
                 "Chunk " + serialNumber +
                         ", MD5 = " + ChecksumUtil.computeMd5(data)
@@ -59,8 +54,8 @@ public class UploadController {
     }
 
     @PostMapping("/complete")
-    public ResponseEntity<UploadCompleteResponse> complete(@RequestParam String fileId) {
-        UploadCompleteResponse response = uploadSessionService.completeUpload(fileId);
+    public ResponseEntity<UploadCompleteResponse> complete(@RequestParam String fileId, Authentication authentication) {
+        UploadCompleteResponse response = uploadSessionService.completeUpload(fileId,(UUID)authentication.getPrincipal());
         return ResponseEntity.ok(response);
     }
 }

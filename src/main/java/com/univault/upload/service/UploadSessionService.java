@@ -188,10 +188,13 @@ public class UploadSessionService {
         return t;
     }
 
-    public UploadCompleteResponse completeUpload(String fileId) {
+    public UploadCompleteResponse completeUpload(String fileId, UUID callerId) {
         UUID fileUuid = UUID.fromString(fileId);
         FileEntity file = fileRepository.findById(fileUuid)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown fileId: " + fileId));
+        if (!file.getUserId().equals(callerId)) {
+            throw new IllegalArgumentException("Unknown fileId: " + fileId);
+        }
 
         List<ChunkEntity> chunks = chunkRepository.findByFileIdOrderBySerialNumber(fileUuid);
 
