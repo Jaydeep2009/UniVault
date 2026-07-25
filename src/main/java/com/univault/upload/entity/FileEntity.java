@@ -35,7 +35,4 @@ public class FileEntity {
         createdAt = Instant.now();
     }
 
-
-    private Instant deletedAt;  // When file was moved to trash
-
 }
