@@ -19,7 +19,7 @@ import com.univault.upload.enums.ChunkStatus;
 import com.univault.upload.enums.FileStatus;
 import com.univault.upload.exception.ChunkUploadFailedException;
 import com.univault.upload.exception.InsufficientStorageException;
-import com.univault.upload.repository.ChunkRepository;
+import com.univault.repository.ChunkRepository;
 import com.univault.upload.repository.FileRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;

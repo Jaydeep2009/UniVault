@@ -1,7 +1,7 @@
 package com.univault.common.exception;
 
-
-
+import com.univault.download.exception.ChunkRetrievalException;
+import com.univault.download.exception.FileNotReadyException;
 import com.univault.upload.exception.ChunkUploadFailedException;
 import com.univault.upload.exception.InsufficientStorageException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,25 +14,30 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
  * Single point of translation from thrown exceptions to HTTP responses.
- * Keeps UploadSessionService (and every other controller) free of
- * try/catch-and-build-ResponseEntity boilerplate.
+ * Keeps services and controllers free of try/catch-and-build-ResponseEntity boilerplate.
  *
- * Mapping (per project doc §7):
- *   InsufficientStorageException -> 507 Insufficient Storage
- *   IllegalArgumentException     -> 400 Bad Request
- *   IllegalStateException        -> 409 Conflict
- *   ChunkUploadFailedException   -> 502 Bad Gateway (retries exhausted talking
- *                                    to the underlying storage provider)
- *   anything else                -> 500 Internal Server Error (generic message,
- *                                    no stack trace leaked to the client)
+ * Exception Mapping:
+ *   UPLOAD:
+ *   - InsufficientStorageException -> 507 Insufficient Storage
+ *   - IllegalArgumentException     -> 400 Bad Request
+ *   - IllegalStateException        -> 409 Conflict
+ *   - ChunkUploadFailedException   -> 502 Bad Gateway (retries exhausted)
+ *
+ *   DOWNLOAD:
+ *   - FileNotReadyException        -> 409 Conflict (file not in READY status)
+ *   - ChunkRetrievalException      -> 500 Internal Server Error (chunk download failed)
+ *
+ *   GENERAL:
+ *   - ResourceNotFoundException    -> 404 Not Found
+ *   - Exception (catch-all)        -> 500 Internal Server Error
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    // Thrown at /init when declared file size won't fit in the user's pooled
-    // available space (StoragePoolManager check).
+    // ============ UPLOAD EXCEPTIONS ============
+
     @ExceptionHandler(InsufficientStorageException.class)
     public ResponseEntity<ErrorResponse> handleInsufficientStorage(
             InsufficientStorageException ex, HttpServletRequest request) {
@@ -40,28 +45,6 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.INSUFFICIENT_STORAGE, ex, request);
     }
 
-    // Bad serialNumber (out of range), unknown fileId, malformed input.
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ErrorResponse> handleIllegalArgument(
-            IllegalArgumentException ex, HttpServletRequest request) {
-        log.warn("Bad request: {}", ex.getMessage());
-        return build(HttpStatus.BAD_REQUEST, ex, request);
-    }
-
-    // Duplicate upload of an already-COMPLETE chunk, declared-size ceiling
-    // breach, or any other "valid request, wrong state" case.
-    @ExceptionHandler(IllegalStateException.class)
-    public ResponseEntity<ErrorResponse> handleIllegalState(
-            IllegalStateException ex, HttpServletRequest request) {
-        log.warn("Conflict: {}", ex.getMessage());
-        return build(HttpStatus.CONFLICT, ex, request);
-    }
-
-    // Retries exhausted while pushing a chunk to the underlying storage
-    // provider (see ChunkUploadRetryHandler). Not the client's fault and not
-    // really "our" server's fault either — 502 signals an upstream failure.
-    // NOTE: adjust getAttemptsMade() below if the accessor is named
-    // differently on your branch.
     @ExceptionHandler(ChunkUploadFailedException.class)
     public ResponseEntity<ErrorResponse> handleChunkUploadFailed(
             ChunkUploadFailedException ex, HttpServletRequest request) {
@@ -70,8 +53,54 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_GATEWAY, ex, request);
     }
 
-    // Catch-all so an unexpected exception never surfaces a stack trace or
-    // internal detail to the client — logged in full server-side instead.
+    // ============ DOWNLOAD EXCEPTIONS ============
+
+    @ExceptionHandler(FileNotReadyException.class)
+    public ResponseEntity<ErrorResponse> handleFileNotReady(
+            FileNotReadyException ex, HttpServletRequest request) {
+        log.warn("File not ready for download - File: {}, Status: {}",
+                ex.getFileId(), ex.getCurrentStatus());
+        return build(HttpStatus.CONFLICT, ex, request);
+    }
+
+    @ExceptionHandler(ChunkRetrievalException.class)
+    public ResponseEntity<ErrorResponse> handleChunkRetrieval(
+            ChunkRetrievalException ex, HttpServletRequest request) {
+        log.error("Chunk retrieval failed after {} attempts for chunk: {}",
+                ex.getAttemptsMade(), ex.getProviderFileId(), ex);
+        ErrorResponse body = ErrorResponse.of(
+                HttpStatus.INTERNAL_SERVER_ERROR.value(),
+                HttpStatus.INTERNAL_SERVER_ERROR.getReasonPhrase(),
+                "Failed to retrieve file chunks. Please try again later.",
+                request.getRequestURI());
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body);
+    }
+
+    // ============ COMMON EXCEPTIONS ============
+
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleResourceNotFound(
+            ResourceNotFoundException ex, HttpServletRequest request) {
+        log.warn("Resource not found: {}", ex.getMessage());
+        return build(HttpStatus.NOT_FOUND, ex, request);
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalArgument(
+            IllegalArgumentException ex, HttpServletRequest request) {
+        log.warn("Bad request: {}", ex.getMessage());
+        return build(HttpStatus.BAD_REQUEST, ex, request);
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalState(
+            IllegalStateException ex, HttpServletRequest request) {
+        log.warn("Conflict: {}", ex.getMessage());
+        return build(HttpStatus.CONFLICT, ex, request);
+    }
+
+    // ============ CATCH-ALL ============
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpected(
             Exception ex, HttpServletRequest request) {
@@ -83,6 +112,8 @@ public class GlobalExceptionHandler {
                 request.getRequestURI());
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body);
     }
+
+    // ============ HELPER METHOD ============
 
     private ResponseEntity<ErrorResponse> build(
             HttpStatus status, Exception ex, HttpServletRequest request) {
