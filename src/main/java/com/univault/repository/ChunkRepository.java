@@ -1,4 +1,4 @@
-package com.univault.upload.repository;
+package com.univault.repository;
 
 import com.univault.upload.entity.ChunkEntity;
 import org.springframework.data.jpa.repository.JpaRepository;

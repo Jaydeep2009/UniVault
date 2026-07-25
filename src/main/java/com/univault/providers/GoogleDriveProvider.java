@@ -151,13 +151,18 @@ public class GoogleDriveProvider implements StorageProvider {
     @Override
     public InputStream downloadChunk(String providerFileId) {
         try {
+            System.out.println("DEBUG: Building Drive client for download...");
             Drive drive = buildDriveClient();
-            // Buffered fully in memory here — same byte[]-vs-stream tradeoff flagged on
-            // uploadChunk applies symmetrically to downloads. Not changed in this pass.
+            System.out.println("DEBUG: Drive client built. Starting download for: " + providerFileId);
+
             ByteArrayOutputStream out = new ByteArrayOutputStream();
+            System.out.println("DEBUG: Calling Google Drive API executeMediaAndDownloadTo...");
             drive.files().get(providerFileId).executeMediaAndDownloadTo(out);
+            System.out.println("DEBUG: Download complete. Bytes received: " + out.size());
+
             return new java.io.ByteArrayInputStream(out.toByteArray());
         } catch (IOException e) {
+            System.out.println("DEBUG: Download failed with IOException: " + e.getMessage());
             throw new RuntimeException("Failed to download chunk from Google Drive: " + providerFileId, e);
         }
     }
