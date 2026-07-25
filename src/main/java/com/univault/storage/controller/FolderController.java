@@ -1,8 +1,11 @@
-package com.univault.storage;
+package com.univault.storage.controller;
 
 import com.univault.storage.dto.CreateFolderRequest;
 import com.univault.storage.dto.FolderResponse;
 import com.univault.storage.dto.RenameFolderRequest;
+import com.univault.storage.service.FileService;
+import com.univault.storage.service.FolderService;
+import com.univault.upload.entity.FileEntity;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -18,7 +21,7 @@ import java.util.UUID;
 public class FolderController {
 
     private final FolderService folderService;
-
+    private final FileService fileService;
     // TODO: confirm this matches how ProviderConnectionController resolves the current
     // user — assumed here that JwtAuthFilter sets the JWT subject (a UUID string) as
     // the Authentication name. If it's a custom UserPrincipal instead, swap this line.
@@ -65,4 +68,19 @@ public class FolderController {
         folderService.deleteFolder(currentUserId(authentication), folderId);
         return ResponseEntity.noContent().build();
     }
+
+    /**
+     * List all files in a folder.
+     * GET /api/folders/{id}/files
+     */
+    @GetMapping("/{id}/files")
+    public ResponseEntity<List<FileEntity>> listFilesInFolder(
+            @PathVariable UUID id,
+            Authentication authentication) {
+
+        UUID userId = (UUID) authentication.getPrincipal();
+        List<FileEntity> files = fileService.listFilesInFolder(userId, id);
+        return ResponseEntity.ok(files);
+    }
+
 }

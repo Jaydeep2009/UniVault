@@ -8,7 +8,7 @@ import com.univault.providers.ProviderFactory;
 import com.univault.providers.StorageProvider;
 import com.univault.repository.FolderRepository;
 import com.univault.repository.StorageProviderAccountRepository;
-import com.univault.storage.StoragePoolManager;
+import com.univault.storage.service.StoragePoolManager;
 import com.univault.upload.dto.ChunkUploadResponse;
 import com.univault.upload.dto.UploadCompleteResponse;
 import com.univault.upload.dto.UploadInitRequest;
