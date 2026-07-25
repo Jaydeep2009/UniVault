@@ -5,8 +5,6 @@ import com.univault.entity.Folder;
 import com.univault.entity.User;
 import com.univault.repository.FolderRepository;
 import com.univault.storage.dto.FolderResponse;
-import com.univault.upload.entity.FileEntity;
-import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -19,8 +17,8 @@ import java.util.stream.Collectors;
 public class FolderService {
 
     private final FolderRepository folderRepository;
-    private final FileService fileService;
-
+    // TODO: inject FileRepository / ChunkRepository (or a shared query) once available,
+    // to block deleting a folder that still contains files — see deleteFolder() below.
 
     public FolderResponse createFolder(UUID userId, String name, UUID parentFolderId) {
         Folder folder = new Folder();
@@ -62,29 +60,20 @@ public class FolderService {
         return toResponse(folderRepository.save(folder));
     }
 
-    @Transactional
     public void deleteFolder(UUID userId, UUID folderId) {
         Folder folder = folderRepository.findByIdAndUserId(folderId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Folder not found: " + folderId));
 
-        // Check for subfolders
         boolean hasSubfolders = !folderRepository.findByUserIdAndParentFolderId(userId, folderId).isEmpty();
         if (hasSubfolders) {
             throw new IllegalStateException("Cannot delete folder " + folderId + " — it still contains subfolders");
         }
 
-        // Check for files in folder
-        List<FileEntity> filesInFolder = fileService.listFilesInFolder(userId, folderId);
-        if (!filesInFolder.isEmpty()) {
-            throw new IllegalStateException(
-                    "Cannot delete folder " + folderId + " — it contains " + filesInFolder.size() + " file(s). " +
-                            "Delete the files first.");
-        }
+        // TODO: also reject if the folder contains any FileMetadata rows (needs FileRepository
+        // or a shared existsByFolderId check — not wired in yet, left as a guard gap for now).
 
-        // Safe to delete
         folderRepository.delete(folder);
     }
-
 
     private FolderResponse toResponse(Folder folder) {
         return new FolderResponse(
