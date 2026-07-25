@@ -4,38 +4,59 @@ import com.univault.download.exception.ChunkRetrievalException;
 import com.univault.entity.StorageProviderAccount;
 import com.univault.providers.ProviderFactory;
 import com.univault.providers.StorageProvider;
-import com.univault.repository.ChunkRepository;
 import com.univault.repository.StorageProviderAccountRepository;
 import com.univault.upload.entity.ChunkEntity;
 import com.univault.upload.enums.ChunkStatus;
+import com.univault.repository.ChunkRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.SequenceInputStream;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class ChunkReassemblyService {
+
     private final ChunkRepository chunkRepository;
-    private final StorageProviderAccountRepository storageAccountRepository;
+    private final StorageProviderAccountRepository accountRepository;
     private final ProviderFactory providerFactory;
 
     @Value("${univault.download.max-retries:3}")
     private int maxRetries;
 
     @Value("${univault.download.retry-base-delay-ms:200}")
-    private long retryBaseDelayMs;
+    private int retryBaseDelayMs;
 
-    /*
+    @Value("${univault.download.parallelism:4}")
+    private int downloadParallelism;
+
+    private ExecutorService downloadExecutor;
+
+    private ExecutorService getExecutor() {
+        if (downloadExecutor == null) {
+            downloadExecutor = Executors.newFixedThreadPool(downloadParallelism,
+                    r -> {
+                        Thread t = new Thread(r);
+                        t.setName("chunk-download-" + t.getId());
+                        t.setDaemon(true);
+                        return t;
+                    });
+        }
+        return downloadExecutor;
+    }
+
+    /**
      * Reassembles a file from its chunks stored across multiple providers.
+     * Uses parallel downloads for better performance.
      *
      * @param fileId The file's UUID
      * @return InputStream of the complete file
@@ -43,75 +64,126 @@ public class ChunkReassemblyService {
      * @throws IllegalStateException if chunks are incomplete
      */
     public InputStream reassembleFile(UUID fileId) {
-        log.info("Reassembling file with ID: {}", fileId);
+        log.info("Starting reassembly for file: {}", fileId);
 
-        //fetch all chunks in the correct order
-
+        // Fetch all chunks in correct order
         List<ChunkEntity> chunks = chunkRepository.findByFileIdOrderBySerialNumber(fileId);
 
         if (chunks.isEmpty()) {
-            throw new IllegalStateException("No chunks found for file ID: " + fileId);
+            throw new IllegalStateException("No chunks found for file: " + fileId);
         }
 
-        //Validate that all chunks are Complete
+        // Validate all chunks are COMPLETE
         boolean allComplete = chunks.stream()
-                .allMatch(chunk -> chunk.getStatus() == ChunkStatus.COMPLETE);
+                .allMatch(c -> c.getStatus() == ChunkStatus.COMPLETE);
 
         if (!allComplete) {
             List<Integer> incompleteChunks = chunks.stream()
-                    .filter(chunk -> chunk.getStatus() != ChunkStatus.COMPLETE)
+                    .filter(c -> c.getStatus() != ChunkStatus.COMPLETE)
                     .map(ChunkEntity::getSerialNumber)
                     .toList();
-
-            throw new IllegalStateException("Chunks are incomplete for file ID: " + fileId + ". Incomplete chunks: " + incompleteChunks);
+            throw new IllegalStateException(
+                    "File has incomplete chunks: " + incompleteChunks + " for file: " + fileId);
         }
 
-        //download each chunk and collect them into a single InputStream
-        List<InputStream> chunkStreams = new ArrayList<>();
+        // Download all chunks in parallel
+        log.info("Starting parallel download of {} chunks", chunks.size());
+        long startTime = System.currentTimeMillis();
+
+        // Create download futures for all chunks
+        List<CompletableFuture<ChunkData>> downloadFutures = new ArrayList<>();
 
         for (ChunkEntity chunk : chunks) {
-            log.info("Downloading chunk {} for file ID: {}", chunk.getSerialNumber(), fileId);
-            InputStream chunkStream = downloadChunkWithRetry(chunk);
-            chunkStreams.add(chunkStream);
+            CompletableFuture<ChunkData> future = CompletableFuture.supplyAsync(
+                    () -> downloadChunkToMemory(chunk),
+                    getExecutor()
+            );
+            downloadFutures.add(future);
         }
 
-        log.info("Successfully reassembled all {} chunks for file ID: {}", chunks.size(), fileId);
+        // Wait for all downloads to complete
+        CompletableFuture<Void> allDone = CompletableFuture.allOf(
+                downloadFutures.toArray(new CompletableFuture[0])
+        );
 
-        // Combine all chunk InputStreams into a single InputStream
-        return new SequenceInputStream(Collections.enumeration(chunkStreams));
+        try {
+            allDone.join(); // Wait for all chunks
+        } catch (Exception e) {
+            log.error("Parallel download failed", e);
+            throw new ChunkRetrievalException(
+                    "Failed to download chunks in parallel",
+                    "multiple-chunks",
+                    maxRetries,
+                    (InterruptedException) e
+            );
+        }
+
+        long downloadTime = System.currentTimeMillis() - startTime;
+        log.info("Parallel download completed in {}ms for {} chunks", downloadTime, chunks.size());
+
+        // Collect results in order
+        List<ChunkData> chunkDataList = new ArrayList<>();
+        for (CompletableFuture<ChunkData> future : downloadFutures) {
+            chunkDataList.add(future.join());
+        }
+
+        // Sort by serial number to ensure correct order
+        chunkDataList.sort(Comparator.comparingInt(ChunkData::serialNumber));
+
+        // Convert to InputStreams
+        List<InputStream> streams = chunkDataList.stream()
+                .map(cd -> new ByteArrayInputStream(cd.data()))
+                .map(s -> (InputStream) s)
+                .toList();
+
+        log.info("Successfully retrieved all {} chunks for file: {}", chunks.size(), fileId);
+
+        // Combine all streams into one
+        return new SequenceInputStream(Collections.enumeration(streams));
     }
 
-    /*
-     * Downloads a single chunk with retry logic.
+    /**
+     * Downloads a single chunk to memory with retry logic.
      */
-    private InputStream downloadChunkWithRetry(ChunkEntity chunk) {
+    private ChunkData downloadChunkToMemory(ChunkEntity chunk) {
+        log.debug("Downloading chunk {} (thread: {})",
+                chunk.getSerialNumber(), Thread.currentThread().getName());
+
         int attempt = 0;
         Exception lastException = null;
 
         while (attempt < maxRetries) {
             try {
-                //Resolve provider account and get the provider
-                StorageProviderAccount account = storageAccountRepository.findById(chunk.getProviderId())
-                        .orElseThrow(() -> new IllegalStateException("No provider account found for ID: " + chunk.getProviderId()));
+                // Resolve provider account
+                StorageProviderAccount account = accountRepository
+                        .findById(chunk.getProviderId())
+                        .orElseThrow(() -> new IllegalStateException(
+                                "Provider account not found: " + chunk.getProviderId()));
 
-                //get provider instance
+                // Get provider instance
                 StorageProvider provider = providerFactory.getProvider(account);
-                InputStream result = provider.downloadChunk(chunk.getProviderFileId());
 
-                System.out.println("DEBUG: Download successful!");
-                return result;
+                // Download chunk
+                InputStream stream = provider.downloadChunk(chunk.getProviderFileId());
+                byte[] data = stream.readAllBytes();
+
+                log.debug("Chunk {} downloaded successfully ({} bytes)",
+                        chunk.getSerialNumber(), data.length);
+
+                return new ChunkData(chunk.getSerialNumber(), data);
+
             } catch (Exception e) {
                 attempt++;
                 lastException = e;
 
                 log.warn("Failed to download chunk {} (attempt {}/{}): {}",
-                        chunk.getProviderFileId(), attempt, maxRetries, e.getMessage());
+                        chunk.getSerialNumber(), attempt, maxRetries, e.getMessage());
 
                 if (attempt < maxRetries) {
-                    //exponential backoff before retrying
-                    long delay = retryBaseDelayMs * (long) Math.pow(2, attempt - 1);
+                    // Exponential backoff
+                    long delayMs = retryBaseDelayMs * (long) Math.pow(2, attempt - 1);
                     try {
-                        Thread.sleep(delay);
+                        Thread.sleep(delayMs);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         throw new ChunkRetrievalException(
@@ -127,7 +199,7 @@ public class ChunkReassemblyService {
 
         // All retries exhausted
         log.error("Failed to download chunk {} after {} attempts",
-                chunk.getProviderFileId(), maxRetries);
+                chunk.getSerialNumber(), maxRetries);
 
         throw new ChunkRetrievalException(
                 "Failed to download chunk after " + maxRetries + " attempts",
@@ -135,6 +207,10 @@ public class ChunkReassemblyService {
                 maxRetries,
                 (InterruptedException) lastException
         );
-
     }
+
+    /**
+     * Record to hold chunk data with serial number for sorting.
+     */
+    private record ChunkData(int serialNumber, byte[] data) {}
 }
