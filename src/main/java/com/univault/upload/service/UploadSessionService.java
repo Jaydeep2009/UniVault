@@ -2,11 +2,13 @@ package com.univault.upload.service;
 
 import com.univault.common.util.ChecksumUtil;
 import com.univault.common.util.MimeTypeUtil;
+import com.univault.entity.Folder;
 import com.univault.entity.StorageProviderAccount;
 import com.univault.providers.ProviderFactory;
 import com.univault.providers.StorageProvider;
+import com.univault.repository.FolderRepository;
 import com.univault.repository.StorageProviderAccountRepository;
-import com.univault.storage.StoragePoolManager;
+import com.univault.storage.service.StoragePoolManager;
 import com.univault.upload.dto.ChunkUploadResponse;
 import com.univault.upload.dto.UploadCompleteResponse;
 import com.univault.upload.dto.UploadInitRequest;
@@ -17,7 +19,7 @@ import com.univault.upload.enums.ChunkStatus;
 import com.univault.upload.enums.FileStatus;
 import com.univault.upload.exception.ChunkUploadFailedException;
 import com.univault.upload.exception.InsufficientStorageException;
-import com.univault.upload.repository.ChunkRepository;
+import com.univault.repository.ChunkRepository;
 import com.univault.upload.repository.FileRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,7 +42,7 @@ public class UploadSessionService {
     private final StoragePoolManager storagePoolManager;
     private final ProviderFactory providerFactory;
     private final StorageProviderAccountRepository accountRepository;
-
+    private final FolderRepository folderRepository;
     @Value("${univault.chunk.size-bytes:4194304}")
     private int chunkSizeBytes;
 
@@ -62,7 +64,16 @@ public class UploadSessionService {
         file.setChunked(expectedChunks > 1);
         file.setTotalChunks(expectedChunks);
         file.setStatus(FileStatus.UPLOADING);
-        // TODO: file.setFolderId(...) if request.getFolderId() present
+
+        // Assign folder if provided, validate it belongs to this user
+        if (request.getFolderId() != null && !request.getFolderId().isBlank()) {
+            UUID folderUuid = UUID.fromString(request.getFolderId());
+            Folder folder = folderRepository.findByIdAndUserId(folderUuid, userId)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Folder not found or does not belong to user: " + request.getFolderId()));
+            file.setFolderId(folder.getId());
+        }
+
 
         file = fileRepository.save(file);
 

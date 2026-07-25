@@ -1,4 +1,4 @@
-package com.univault.storage;
+package com.univault.storage.service;
 
 import com.univault.common.exception.ResourceNotFoundException;
 import com.univault.entity.Folder;

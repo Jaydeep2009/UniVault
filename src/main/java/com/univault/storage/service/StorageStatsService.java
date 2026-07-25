@@ -1,4 +1,4 @@
-package com.univault.storage;
+package com.univault.storage.service;
 
 import com.univault.entity.StorageProviderAccount;
 import com.univault.repository.StorageProviderAccountRepository;
