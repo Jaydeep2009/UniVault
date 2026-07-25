@@ -4,17 +4,18 @@ import com.univault.common.exception.ResourceNotFoundException;
 import com.univault.entity.StorageProviderAccount;
 import com.univault.providers.ProviderFactory;
 import com.univault.providers.StorageProvider;
+import com.univault.repository.ChunkRepository;
 import com.univault.repository.StorageProviderAccountRepository;
 import com.univault.upload.entity.ChunkEntity;
 import com.univault.upload.entity.FileEntity;
 import com.univault.upload.enums.FileStatus;
-import com.univault.repository.ChunkRepository;
 import com.univault.upload.repository.FileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -59,18 +60,39 @@ public class FileService {
     }
 
     /**
-     * Delete a file and all its chunks from all providers.
-     * This is a complex operation that:
-     * 1. Fetches all chunks
-     * 2. Groups chunks by provider
-     * 3. Deletes chunks from each provider
-     * 4. Updates provider account quotas
-     * 5. Deletes chunks from DB
-     * 6. Marks file as DELETED (soft delete)
+     * Soft delete - moves file to trash.
+     * File is marked as DELETED but chunks remain on providers.
+     * Space is NOT freed (file still counts against quota).
+     * Can be restored within 30 days.
      */
     @Transactional
-    public void deleteFile(UUID fileId, UUID userId) {
-        log.info("Deleting file {} for user {}", fileId, userId);
+    public void softDeleteFile(UUID fileId, UUID userId) {
+        log.info("Soft deleting file {} for user {}", fileId, userId);
+
+        // Get file and validate ownership
+        FileEntity file = getFile(fileId, userId);
+
+        // Check if already deleted
+        if (file.getStatus() == FileStatus.DELETED) {
+            throw new IllegalStateException("File is already deleted");
+        }
+
+        // Mark as deleted with timestamp
+        file.setStatus(FileStatus.DELETED);
+        file.setDeletedAt(Instant.now());
+        fileRepository.save(file);
+
+        log.info("File {} moved to trash", fileId);
+    }
+
+    /**
+     * Permanent delete - removes file and all chunks from providers.
+     * Frees storage space and updates provider quotas.
+     * Cannot be undone.
+     */
+    @Transactional
+    public void permanentDeleteFile(UUID fileId, UUID userId) {
+        log.info("Permanently deleting file {} for user {}", fileId, userId);
 
         // Get file and validate ownership
         FileEntity file = getFile(fileId, userId);
@@ -79,9 +101,8 @@ public class FileService {
         List<ChunkEntity> chunks = chunkRepository.findByFileIdOrderBySerialNumber(fileId);
 
         if (chunks.isEmpty()) {
-            log.warn("File {} has no chunks, marking as deleted", fileId);
-            file.setStatus(FileStatus.DELETED);
-            fileRepository.save(file);
+            log.warn("File {} has no chunks, deleting metadata only", fileId);
+            fileRepository.delete(file);
             return;
         }
 
@@ -91,18 +112,16 @@ public class FileService {
 
         log.info("Deleting {} chunks across {} providers", chunks.size(), chunksByProvider.size());
 
-        // Delete chunks from each provider and update quotas
+        // Delete chunks from each provider and FREE SPACE
         for (Map.Entry<UUID, List<ChunkEntity>> entry : chunksByProvider.entrySet()) {
             UUID providerId = entry.getKey();
             List<ChunkEntity> providerChunks = entry.getValue();
 
             try {
-                // Get provider account
                 StorageProviderAccount account = accountRepository.findById(providerId)
                         .orElseThrow(() -> new IllegalStateException(
                                 "Provider account not found: " + providerId));
 
-                // Get provider instance
                 StorageProvider provider = providerFactory.getProvider(account);
 
                 long freedBytes = 0;
@@ -116,17 +135,16 @@ public class FileService {
                             log.debug("Deleted chunk {} from provider {}",
                                     chunk.getSerialNumber(), providerId);
                         } else {
-                            log.warn("Failed to delete chunk {} from provider {} (may not exist)",
+                            log.warn("Failed to delete chunk {} from provider {}",
                                     chunk.getSerialNumber(), providerId);
                         }
                     } catch (Exception e) {
-                        log.error("Error deleting chunk {} from provider {}: {}",
-                                chunk.getSerialNumber(), providerId, e.getMessage());
-                        // Continue with other chunks - don't fail entire delete
+                        log.error("Error deleting chunk {}: {}",
+                                chunk.getSerialNumber(), e.getMessage());
                     }
                 }
 
-                // Update provider quota
+                // Update provider quota - FREE THE SPACE
                 if (freedBytes > 0) {
                     long currentUsed = account.getUsedQuotaBytes() != null
                             ? account.getUsedQuotaBytes() : 0L;
@@ -137,9 +155,7 @@ public class FileService {
                 }
 
             } catch (Exception e) {
-                log.error("Error processing provider {} during file deletion: {}",
-                        providerId, e.getMessage(), e);
-                // Continue with other providers
+                log.error("Error processing provider {}: {}", providerId, e.getMessage(), e);
             }
         }
 
@@ -147,10 +163,38 @@ public class FileService {
         chunkRepository.deleteAll(chunks);
         log.info("Deleted {} chunk records from database", chunks.size());
 
-        // Mark file as deleted (soft delete)
-        file.setStatus(FileStatus.DELETED);
+        // Delete file metadata (hard delete)
+        fileRepository.delete(file);
+
+        log.info("File {} permanently deleted", fileId);
+    }
+
+    /**
+     * Restore a file from trash.
+     */
+    @Transactional
+    public void restoreFile(UUID fileId, UUID userId) {
+        log.info("Restoring file {} for user {}", fileId, userId);
+
+        FileEntity file = getFile(fileId, userId);
+
+        if (file.getStatus() != FileStatus.DELETED) {
+            throw new IllegalStateException("File is not in trash");
+        }
+
+        // Restore to READY status
+        file.setStatus(FileStatus.READY);
+        file.setDeletedAt(null);
         fileRepository.save(file);
 
-        log.info("File {} successfully deleted", fileId);
+        log.info("File {} restored from trash", fileId);
     }
+
+    /**
+     * List files in trash (soft deleted files).
+     */
+    public List<FileEntity> listTrashFiles(UUID userId) {
+        return fileRepository.findByUserIdAndStatus(userId, FileStatus.DELETED);
+    }
+
 }

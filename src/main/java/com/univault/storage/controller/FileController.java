@@ -49,7 +49,7 @@ public class FileController {
     }
 
     /**
-     * Delete a file and all its chunks.
+     * Soft delete a file (move to trash).
      * DELETE /api/files/{id}
      */
     @DeleteMapping("/{id}")
@@ -58,9 +58,9 @@ public class FileController {
             Authentication authentication) {
 
         UUID userId = (UUID) authentication.getPrincipal();
-        log.info("Deleting file {} for user {}", id, userId);
+        log.info("Soft deleting file {} for user {}", id, userId);
 
-        fileService.deleteFile(id, userId);
+        fileService.softDeleteFile(id, userId);
         return ResponseEntity.noContent().build();
     }
 }
