@@ -6,6 +6,7 @@ import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeToken
 import com.google.api.client.googleapis.auth.oauth2.GoogleClientSecrets;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
+import com.univault.auth.JwtService;
 import com.univault.entity.StorageProviderAccount;
 import com.univault.entity.User;
 import com.univault.repository.StorageProviderAccountRepository;
@@ -30,6 +31,7 @@ public class ProviderConnectionController {
 
     private final StorageProviderAccountRepository accountRepository;
     private final UserRepository userRepository;
+    private final JwtService jwtService;
     private final String clientId;
     private final String clientSecret;
     private final String redirectUri;
@@ -45,12 +47,14 @@ public class ProviderConnectionController {
             StorageProviderAccountRepository accountRepository,
             UserRepository userRepository,
             GoogleDriveProvider.Factory driveProviderFactory,
+            JwtService jwtService,
             @Value("${GOOGLE_CLIENT_ID}") String clientId,
             @Value("${GOOGLE_CLIENT_SECRET}") String clientSecret,
             @Value("${GOOGLE_REDIRECT_URI}") String redirectUri) {
         this.accountRepository = accountRepository;
         this.userRepository = userRepository;
         this.driveProviderFactory = driveProviderFactory;
+        this.jwtService = jwtService;
         this.clientId = clientId;
         this.clientSecret = clientSecret;
         this.redirectUri = redirectUri;
@@ -72,10 +76,32 @@ public class ProviderConnectionController {
     }
 
     @GetMapping("/authorize")
-    public ResponseEntity<Void> authorize(Authentication authentication) throws IOException {
-        // "state" carries the authenticated user's id through the redirect round-trip,
-        // since Google's callback hits us with no auth context of its own.
-        String userId = authentication.getName();
+    public ResponseEntity<?> authorize(
+            @RequestParam(value = "token", required = false) String jwtToken,
+            Authentication authentication) throws IOException {
+        
+        // Get user ID - try JWT token from query param first (for browser redirects),
+        // then fall back to the authentication context (for API calls with header)
+        String userId = null;
+        
+        if (jwtToken != null && !jwtToken.isEmpty()) {
+            // Validate JWT token from query parameter
+            if (jwtService.isTokenValid(jwtToken)) {
+                UUID userIdFromToken = jwtService.extractUserId(jwtToken);
+                userId = userIdFromToken.toString();
+            } else {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body("Invalid or expired token");
+            }
+        } else if (authentication != null && authentication.isAuthenticated()) {
+            // JWT token was in Authorization header and already validated by filter
+            userId = authentication.getName();
+        }
+        
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body("Authentication required");
+        }
 
         String url = buildFlow().newAuthorizationUrl()
                 .setRedirectUri(redirectUri)
@@ -155,7 +181,9 @@ public class ProviderConnectionController {
             e.printStackTrace();
         }
 
-        return ResponseEntity.ok("Google Drive account connected successfully.");
+        return ResponseEntity.status(HttpStatus.FOUND)
+                .header("Location", "http://localhost:5173/storage?success=true")
+                .build();
 
     }
 
