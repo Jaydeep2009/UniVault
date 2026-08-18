@@ -103,6 +103,11 @@ public class UploadSessionService {
             throw new IllegalArgumentException("Unknown fileId: " + fileId); // or a dedicated 403/404
         }
 
+        // Prevent uploading chunks to a deleted/cancelled file
+        if (file.getStatus() == FileStatus.DELETED) {
+            throw new IllegalStateException("Cannot upload chunk to deleted file: " + fileId);
+        }
+
         if (serialNumber < 0 || serialNumber >= file.getTotalChunks()) {
             throw new IllegalArgumentException(
                     "Invalid serialNumber " + serialNumber + " for file with " + file.getTotalChunks() + " expected chunks");

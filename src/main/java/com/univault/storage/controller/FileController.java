@@ -111,4 +111,28 @@ public class FileController {
         fileService.softDeleteFile(id, userId);
         return ResponseEntity.noContent().build();
     }
+
+    /**
+     * Hard delete a file and all its chunks immediately.
+     * This is used for cancelled/incomplete uploads.
+     * Does NOT require file to be in trash first.
+     * 
+     * DELETE /api/files/{id}/hard
+     */
+    @DeleteMapping("/{id}/hard")
+    public ResponseEntity<Void> hardDeleteFile(
+            @PathVariable UUID id,
+            Authentication authentication) {
+
+        UUID userId = (UUID) authentication.getPrincipal();
+        log.info("Hard deleting file {} for user {} (cancelled upload)", id, userId);
+
+        // Delete chunks and file record immediately
+        fileService.deleteFileAndChunks(id, userId);
+        
+        // Delete the file entity from database
+        fileService.hardDeleteFileRecord(id, userId);
+        
+        return ResponseEntity.noContent().build();
+    }
 }

@@ -144,13 +144,32 @@ public class FileService {
         // Get file and validate ownership
         FileEntity file = getFile(fileId, userId);
 
-        // Fetch all chunks
+        // CRITICAL: Mark file as DELETED first to prevent race condition
+        // This prevents new chunks from being uploaded while we're deleting
+        if (file.getStatus() != FileStatus.DELETED) {
+            file.setStatus(FileStatus.DELETED);
+            fileRepository.save(file);
+            log.info("Marked file {} as DELETED to prevent new chunk uploads", fileId);
+        }
+
+        // Small delay to allow any in-flight chunk uploads to complete
+        // This helps prevent orphaned chunks from uploads that were in-progress
+        try {
+            Thread.sleep(500); // 500ms should be enough for in-flight requests
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Interrupted while waiting for in-flight uploads");
+        }
+
+        // Fetch all chunks - get fresh data from database after the delay
         List<ChunkEntity> chunks = chunkRepository.findByFileIdOrderBySerialNumber(fileId);
 
         if (chunks.isEmpty()) {
             log.warn("File {} has no chunks to delete", fileId);
             return;
         }
+
+        log.info("Found {} chunks to delete for file {}", chunks.size(), fileId);
 
         // Group chunks by provider for batch deletion
         Map<UUID, List<ChunkEntity>> chunksByProvider = chunks.stream()
@@ -210,10 +229,81 @@ public class FileService {
             }
         }
 
-        // Delete chunks from database
-        chunkRepository.deleteAll(chunks);
-        log.info("Deleted {} chunk records from database", chunks.size());
+        // Delete chunks from database using repository method to avoid stale state
+        try {
+            int deletedCount = chunkRepository.deleteByFileId(fileId);
+            log.info("Deleted {} chunk records from database for file {}", deletedCount, fileId);
+            
+            // Verify no orphaned chunks remain (race condition check)
+            List<ChunkEntity> remainingChunks = chunkRepository.findByFileIdOrderBySerialNumber(fileId);
+            if (!remainingChunks.isEmpty()) {
+                log.warn("Found {} orphaned chunks after deletion, cleaning up...", remainingChunks.size());
+                for (ChunkEntity orphanedChunk : remainingChunks) {
+                    try {
+                        // Try to delete from provider if we have the provider info
+                        if (orphanedChunk.getProviderId() != null && orphanedChunk.getProviderFileId() != null) {
+                            try {
+                                StorageProviderAccount account = accountRepository.findById(orphanedChunk.getProviderId())
+                                        .orElse(null);
+                                if (account != null) {
+                                    StorageProvider provider = providerFactory.getProvider(account);
+                                    boolean deleted = provider.deleteChunk(orphanedChunk.getProviderFileId());
+                                    if (deleted) {
+                                        log.info("Deleted orphaned chunk {} from provider", orphanedChunk.getSerialNumber());
+                                        // Update quota
+                                        long currentUsed = account.getUsedQuotaBytes() != null ? account.getUsedQuotaBytes() : 0L;
+                                        account.setUsedQuotaBytes(Math.max(0, currentUsed - orphanedChunk.getSize()));
+                                        accountRepository.save(account);
+                                    }
+                                }
+                            } catch (Exception e) {
+                                log.error("Failed to delete orphaned chunk from provider: {}", e.getMessage());
+                            }
+                        }
+                        chunkRepository.delete(orphanedChunk);
+                        log.info("Deleted orphaned chunk {} from database", orphanedChunk.getId());
+                    } catch (Exception ex) {
+                        log.warn("Failed to cleanup orphaned chunk {}: {}", orphanedChunk.getId(), ex.getMessage());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error deleting chunks from database: {}", e.getMessage(), e);
+            // Try alternative: delete one by one
+            log.info("Attempting individual chunk deletion...");
+            // Refresh chunk list
+            List<ChunkEntity> remainingChunks = chunkRepository.findByFileIdOrderBySerialNumber(fileId);
+            for (ChunkEntity chunk : remainingChunks) {
+                try {
+                    chunkRepository.delete(chunk);
+                    log.debug("Deleted chunk {} individually", chunk.getId());
+                } catch (Exception ex) {
+                    log.warn("Failed to delete chunk {}: {}", chunk.getId(), ex.getMessage());
+                }
+            }
+        }
 
         log.info("File {} chunks successfully deleted", fileId);
+    }
+
+    /**
+     * Hard delete the file record from database.
+     * Used after deleteFileAndChunks for cancelled/incomplete uploads.
+     * Handles concurrent delete requests gracefully.
+     */
+    @Transactional
+    public void hardDeleteFileRecord(UUID fileId, UUID userId) {
+        log.info("Hard deleting file record {} for user {}", fileId, userId);
+        
+        // Check if file exists first to handle concurrent deletes
+        if (!fileRepository.existsById(fileId)) {
+            log.warn("File {} already deleted (concurrent request), skipping", fileId);
+            return;
+        }
+        
+        FileEntity file = getFile(fileId, userId);
+        fileRepository.delete(file);
+        
+        log.info("File record {} deleted from database", fileId);
     }
 }

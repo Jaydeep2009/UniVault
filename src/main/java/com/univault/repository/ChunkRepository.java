@@ -11,5 +11,7 @@ public interface ChunkRepository extends JpaRepository<ChunkEntity, UUID> {
     // Additional query methods can be defined here if needed
     List<ChunkEntity> findByFileIdOrderBySerialNumber(UUID fileId);
     Optional<ChunkEntity> findByFileIdAndSerialNumber(UUID fileId, int serialNumber);
-
+    
+    // Delete all chunks for a file (returns count of deleted records)
+    int deleteByFileId(UUID fileId);
 }
