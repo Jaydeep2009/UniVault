@@ -31,17 +31,69 @@ public class FileService {
     private final ProviderFactory providerFactory;
 
     /**
-     * List all files for a user.
+     * List all files for a user (excluding deleted files).
      */
     public List<FileEntity> listUserFiles(UUID userId) {
-        return fileRepository.findByUserId(userId);
+        return fileRepository.findByUserId(userId).stream()
+                .filter(file -> file.getStatus() != FileStatus.DELETED)
+                .collect(Collectors.toList());
     }
 
     /**
-     * List files in a specific folder.
+     * List all deleted files (trash) for a user.
+     */
+    public List<FileEntity> listDeletedFiles(UUID userId) {
+        return fileRepository.findByUserId(userId).stream()
+                .filter(file -> file.getStatus() == FileStatus.DELETED)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Restore a deleted file from trash.
+     */
+    @Transactional
+    public FileEntity restoreFile(UUID fileId, UUID userId) {
+        log.info("Restoring file {} for user {}", fileId, userId);
+
+        FileEntity file = getFile(fileId, userId);
+
+        if (file.getStatus() != FileStatus.DELETED) {
+            throw new IllegalStateException("File is not deleted: " + fileId);
+        }
+
+        file.setStatus(FileStatus.READY);
+        return fileRepository.save(file);
+    }
+
+    /**
+     * Permanently delete a file (hard delete - removes chunks and database record).
+     */
+    @Transactional
+    public void permanentlyDeleteFile(UUID fileId, UUID userId) {
+        log.info("Permanently deleting file {} for user {}", fileId, userId);
+
+        FileEntity file = getFile(fileId, userId);
+
+        if (file.getStatus() != FileStatus.DELETED) {
+            throw new IllegalStateException("File must be in trash before permanent deletion: " + fileId);
+        }
+
+        // Delete chunks from cloud storage
+        deleteFileAndChunks(fileId, userId);
+
+        // Hard delete the file record
+        fileRepository.delete(file);
+
+        log.info("File {} permanently deleted", fileId);
+    }
+
+    /**
+     * List files in a specific folder (excluding deleted files).
      */
     public List<FileEntity> listFilesInFolder(UUID userId, UUID folderId) {
-        return fileRepository.findByUserIdAndFolderId(userId, folderId);
+        return fileRepository.findByUserIdAndFolderId(userId, folderId).stream()
+                .filter(file -> file.getStatus() != FileStatus.DELETED)
+                .collect(Collectors.toList());
     }
 
     /**
@@ -59,18 +111,35 @@ public class FileService {
     }
 
     /**
-     * Delete a file and all its chunks from all providers.
-     * This is a complex operation that:
-     * 1. Fetches all chunks
-     * 2. Groups chunks by provider
-     * 3. Deletes chunks from each provider
-     * 4. Updates provider account quotas
-     * 5. Deletes chunks from DB
-     * 6. Marks file as DELETED (soft delete)
+     * Soft delete a file (instant - just marks as DELETED).
+     * Chunks remain in cloud storage and can be restored.
      */
     @Transactional
-    public void deleteFile(UUID fileId, UUID userId) {
-        log.info("Deleting file {} for user {}", fileId, userId);
+    public void softDeleteFile(UUID fileId, UUID userId) {
+        log.info("Soft deleting file {} for user {}", fileId, userId);
+
+        FileEntity file = getFile(fileId, userId);
+        
+        if (file.getStatus() == FileStatus.DELETED) {
+            log.warn("File {} is already deleted", fileId);
+            return;
+        }
+
+        // Simply mark as deleted - chunks stay intact
+        file.setStatus(FileStatus.DELETED);
+        fileRepository.save(file);
+
+        log.info("File {} soft deleted (chunks preserved for restore)", fileId);
+    }
+
+    /**
+     * Delete a file and all its chunks from all providers.
+     * This is now only used for PERMANENT deletion from trash.
+     * Renamed from deleteFile to clarify it's the old hard-delete logic.
+     */
+    @Transactional
+    public void deleteFileAndChunks(UUID fileId, UUID userId) {
+        log.info("Hard deleting file {} and chunks for user {}", fileId, userId);
 
         // Get file and validate ownership
         FileEntity file = getFile(fileId, userId);
@@ -79,9 +148,7 @@ public class FileService {
         List<ChunkEntity> chunks = chunkRepository.findByFileIdOrderBySerialNumber(fileId);
 
         if (chunks.isEmpty()) {
-            log.warn("File {} has no chunks, marking as deleted", fileId);
-            file.setStatus(FileStatus.DELETED);
-            fileRepository.save(file);
+            log.warn("File {} has no chunks to delete", fileId);
             return;
         }
 
@@ -147,10 +214,6 @@ public class FileService {
         chunkRepository.deleteAll(chunks);
         log.info("Deleted {} chunk records from database", chunks.size());
 
-        // Mark file as deleted (soft delete)
-        file.setStatus(FileStatus.DELETED);
-        fileRepository.save(file);
-
-        log.info("File {} successfully deleted", fileId);
+        log.info("File {} chunks successfully deleted", fileId);
     }
 }

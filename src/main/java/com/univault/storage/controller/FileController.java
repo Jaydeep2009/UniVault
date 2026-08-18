@@ -33,6 +33,51 @@ public class FileController {
     }
 
     /**
+     * List all deleted files (trash) for the authenticated user.
+     * GET /api/files/trash
+     */
+    @GetMapping("/trash")
+    public ResponseEntity<List<FileEntity>> listTrash(Authentication authentication) {
+        UUID userId = (UUID) authentication.getPrincipal();
+        log.info("Listing trash files for user {}", userId);
+
+        List<FileEntity> deletedFiles = fileService.listDeletedFiles(userId);
+        return ResponseEntity.ok(deletedFiles);
+    }
+
+    /**
+     * Restore a deleted file from trash.
+     * POST /api/files/{id}/restore
+     */
+    @PostMapping("/{id}/restore")
+    public ResponseEntity<FileEntity> restoreFile(
+            @PathVariable UUID id,
+            Authentication authentication) {
+
+        UUID userId = (UUID) authentication.getPrincipal();
+        log.info("Restoring file {} for user {}", id, userId);
+
+        FileEntity file = fileService.restoreFile(id, userId);
+        return ResponseEntity.ok(file);
+    }
+
+    /**
+     * Permanently delete a file from trash.
+     * DELETE /api/files/{id}/permanent
+     */
+    @DeleteMapping("/{id}/permanent")
+    public ResponseEntity<Void> permanentlyDeleteFile(
+            @PathVariable UUID id,
+            Authentication authentication) {
+
+        UUID userId = (UUID) authentication.getPrincipal();
+        log.info("Permanently deleting file {} for user {}", id, userId);
+
+        fileService.permanentlyDeleteFile(id, userId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
      * Get a single file by ID.
      * GET /api/files/{id}
      */
@@ -49,7 +94,10 @@ public class FileController {
     }
 
     /**
-     * Delete a file and all its chunks.
+     * Delete a file (soft delete - marks as DELETED immediately).
+     * Chunks remain in cloud storage and can be restored.
+     * Use permanent delete to actually remove chunks.
+     * 
      * DELETE /api/files/{id}
      */
     @DeleteMapping("/{id}")
@@ -58,9 +106,9 @@ public class FileController {
             Authentication authentication) {
 
         UUID userId = (UUID) authentication.getPrincipal();
-        log.info("Deleting file {} for user {}", id, userId);
+        log.info("Soft deleting file {} for user {}", id, userId);
 
-        fileService.deleteFile(id, userId);
+        fileService.softDeleteFile(id, userId);
         return ResponseEntity.noContent().build();
     }
 }

@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/folders")
+@RequestMapping("/api/folders")
 @RequiredArgsConstructor
 public class FolderController {
 
