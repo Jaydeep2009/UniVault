@@ -4,11 +4,13 @@ import com.univault.common.util.ChecksumUtil;
 import com.univault.common.util.MimeTypeUtil;
 import com.univault.entity.Folder;
 import com.univault.entity.StorageProviderAccount;
+import com.univault.entity.ActivityLog;
 import com.univault.providers.ProviderFactory;
 import com.univault.providers.StorageProvider;
 import com.univault.repository.FolderRepository;
 import com.univault.repository.StorageProviderAccountRepository;
 import com.univault.storage.service.StoragePoolManager;
+import com.univault.service.ActivityLogService;
 import com.univault.upload.dto.ChunkUploadResponse;
 import com.univault.upload.dto.UploadCompleteResponse;
 import com.univault.upload.dto.UploadInitRequest;
@@ -43,6 +45,7 @@ public class UploadSessionService {
     private final ProviderFactory providerFactory;
     private final StorageProviderAccountRepository accountRepository;
     private final FolderRepository folderRepository;
+    private final ActivityLogService activityLogService;
     @Value("${univault.chunk.size-bytes:4194304}")
     private int chunkSizeBytes;
 
@@ -233,6 +236,20 @@ public class UploadSessionService {
             file.setSize(actualTotalSize); // overwrite declared estimate with real measured size
             file.setStatus(FileStatus.READY);
             fileRepository.save(file);
+            
+            // Log activity
+            activityLogService.logActivity(
+                    callerId,
+                    ActivityLog.ActivityType.UPLOAD,
+                    "Uploaded 1 file",
+                    file.getName(),
+                    "file",
+                    file.getId(),
+                    "UniVault",
+                    null,
+                    "File uploaded successfully"
+            );
+            
             return new UploadCompleteResponse(fileId, "READY", missing);
         } else {
             return new UploadCompleteResponse(fileId, "INCOMPLETE", missing);

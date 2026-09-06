@@ -70,13 +70,19 @@ public class GoogleDriveProvider implements StorageProvider {
                 .build();
     }*/
     private Drive buildDriveClient() {
-        refreshTokenIfExpired(); // keep this — still useful as a proactive refresh
+        refreshTokenIfExpired(); // Proactive refresh before building client
 
+        // Note: We're intentionally NOT using UserCredentials auto-refresh here because
+        // when it refreshes, we have no callback to persist the new token to our database.
+        // Instead, we handle refresh explicitly in refreshTokenIfExpired() above.
+        AccessToken accessToken = new AccessToken(account.getAccessToken(), 
+                                                  java.util.Date.from(account.getTokenExpiresAt()));
+        
         UserCredentials credentials = UserCredentials.newBuilder()
                 .setClientId(clientId)
                 .setClientSecret(clientSecret)
                 .setRefreshToken(account.getRefreshToken())
-                .setAccessToken(new AccessToken(account.getAccessToken(), null))
+                .setAccessToken(accessToken)
                 .build();
 
         HttpCredentialsAdapter credentialsAdapter = new HttpCredentialsAdapter(credentials);
@@ -96,6 +102,10 @@ public class GoogleDriveProvider implements StorageProvider {
         if (expiresAt == null || expiresAt.isAfter(Instant.now().plusSeconds(60))) {
             return; // still valid (60s buffer to avoid racing expiry mid-request)
         }
+        
+        System.out.println("[GoogleDrive] Token expired for account " + account.getId() + 
+                         ", attempting refresh... (expired at: " + expiresAt + ", now: " + Instant.now() + ")");
+        
         try {
             GoogleTokenResponse tokenResponse = new GoogleRefreshTokenRequest(
                     HTTP_TRANSPORT, JSON_FACTORY,
@@ -105,8 +115,13 @@ public class GoogleDriveProvider implements StorageProvider {
             account.setAccessToken(tokenResponse.getAccessToken());
             account.setTokenExpiresAt(Instant.now().plusSeconds(tokenResponse.getExpiresInSeconds()));
             accountRepository.save(account); // EncryptedStringConverter re-encrypts on write
+            
+            System.out.println("[GoogleDrive] Token refresh successful for account " + account.getId() + 
+                             ", new expiry: " + account.getTokenExpiresAt());
 
         } catch (IOException e) {
+            System.err.println("[GoogleDrive] Token refresh FAILED for account " + account.getId() + 
+                             ": " + e.getMessage());
             throw new IllegalStateException(
                     "Failed to refresh Google Drive token for account " + account.getId(), e);
         }

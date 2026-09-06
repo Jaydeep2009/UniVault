@@ -66,17 +66,35 @@ public class TokenRefreshService {
                 candidates.size(), lookaheadMinutes);
 
         for (StorageProviderAccount account : candidates) {
+            Instant oldExpiry = account.getTokenExpiresAt();
+            
             try {
+                log.debug("Attempting token refresh for account {} ({}), expires at: {}", 
+                         account.getId(), account.getProviderType(), oldExpiry);
+                
                 StorageProvider provider = providerFactory.getProvider(account);
                 // Triggers the provider's own internal refresh-if-expired logic as a side effect.
                 provider.isHealthy();
-                log.info("Token refresh triggered for account {} ({})", account.getId(), account.getProviderType());
+                
+                // Reload account to check if token was actually refreshed
+                StorageProviderAccount reloaded = accountRepository.findById(account.getId())
+                        .orElse(account);
+                Instant newExpiry = reloaded.getTokenExpiresAt();
+                
+                if (newExpiry != null && newExpiry.isAfter(oldExpiry)) {
+                    log.info("Token refresh successful for account {} ({}), new expiry: {} (was: {})", 
+                            account.getId(), account.getProviderType(), newExpiry, oldExpiry);
+                } else {
+                    log.warn("Token refresh completed but expiry unchanged for account {} ({}), still: {}", 
+                            account.getId(), account.getProviderType(), newExpiry);
+                }
             } catch (Exception e) {
                 // A refresh failure here (e.g. refresh token itself revoked) will surface as
                 // an unhealthy result on the next AccountHealthCheckService pass, which will
                 // correctly mark the account EXPIRED/ERROR — no need to duplicate that logic here.
-                log.warn("Token refresh attempt failed for account {} ({}): {}",
-                        account.getId(), account.getProviderType(), e.getMessage());
+                log.error("Token refresh FAILED for account {} ({}): {} - {}", 
+                         account.getId(), account.getProviderType(), 
+                         e.getClass().getSimpleName(), e.getMessage());
             }
         }
     }

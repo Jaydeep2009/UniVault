@@ -4,6 +4,7 @@ import com.univault.entity.User;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
@@ -21,9 +22,10 @@ import java.util.UUID;
  * generate the same way as TOKEN_ENCRYPTION_KEY) — never hardcoded.
  */
 @Component
+@Slf4j
 public class JwtService {
 
-    private static final long EXPIRATION_MS = 24L * 60 * 60 * 1000; // 24 hours
+    private static final long EXPIRATION_MS = 7L * 24 * 60 * 60 * 1000; // 7 days
 
     private final SecretKey key;
 
@@ -50,8 +52,11 @@ public class JwtService {
         try {
             parseClaims(token);
             return true;
+        } catch (io.jsonwebtoken.ExpiredJwtException e) {
+                log.warn("USER JWT EXPIRED: Token expired at {}. User needs to log in again.", e.getClaims().getExpiration());
+            return false;
         } catch (Exception e) {
-            System.out.println("JWT VALIDATION FAILED: " + e.getClass().getSimpleName() + " - " + e.getMessage());
+            log.warn("USER JWT VALIDATION FAILED: {} - {}", e.getClass().getSimpleName(), e.getMessage());
             return false;
         }
     }

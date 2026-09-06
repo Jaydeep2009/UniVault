@@ -46,13 +46,8 @@ public class QuotaSyncService {
 
         int synced = 0;
         for (StorageProviderAccount account : activeAccounts) {
-            try {
-                if (syncAccount(account)) {
-                    synced++;
-                }
-            } catch (Exception e) {
-                log.warn("Quota sync failed for account {} ({}): {}",
-                        account.getId(), account.getProviderType(), e.getMessage());
+            if (syncAccount(account)) {
+                synced++;
             }
         }
 
@@ -66,18 +61,27 @@ public class QuotaSyncService {
     }
 
     private boolean syncAccount(StorageProviderAccount account) {
-        StorageProvider provider = providerFactory.getProvider(account);
+        try {
+            StorageProvider provider = providerFactory.getProvider(account);
 
-        if (provider instanceof GoogleDriveProvider googleDriveProvider) {
-            GoogleDriveProvider.QuotaInfo quota = googleDriveProvider.fetchQuota();
-            account.setTotalQuotaBytes(quota.totalBytes());
-            account.setUsedQuotaBytes(quota.usedBytes());
-            accountRepository.save(account);
-            return true;
+            if (provider instanceof GoogleDriveProvider googleDriveProvider) {
+                GoogleDriveProvider.QuotaInfo quota = googleDriveProvider.fetchQuota();
+                account.setTotalQuotaBytes(quota.totalBytes());
+                account.setUsedQuotaBytes(quota.usedBytes());
+                accountRepository.save(account);
+                log.debug("Quota synced for account {}: {}/{} bytes used", 
+                         account.getId(), quota.usedBytes(), quota.totalBytes());
+                return true;
+            }
+
+            log.debug("Skipping quota sync for account {} — no quota-pair support for provider type {}",
+                    account.getId(), account.getProviderType());
+            return false;
+        } catch (Exception e) {
+            log.error("Quota sync failed for account {} ({}): {} - {}", 
+                     account.getId(), account.getProviderType(), 
+                     e.getClass().getSimpleName(), e.getMessage());
+            return false;
         }
-
-        log.debug("Skipping quota sync for account {} — no quota-pair support for provider type {}",
-                account.getId(), account.getProviderType());
-        return false;
     }
 }

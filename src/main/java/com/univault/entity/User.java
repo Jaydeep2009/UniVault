@@ -22,14 +22,26 @@ public class User {
     @Column(nullable = false, unique = true)
     private String email;
 
-    @Column(name = "password_hash", nullable = false)
+    @Column(name = "password_hash")
     private String passwordHash;
+
+    @Column(name = "supabase_user_id", unique = true)
+    private String supabaseUserId;
+
+    @Column(name = "display_name")
+    private String displayName;
+
+    @Column(name = "profile_picture_url")
+    private String profilePictureUrl;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
     @Column(name = "auth_type", nullable = false)
     private String authType;
+
+    @Column(name = "email_verified", nullable = false)
+    private Boolean emailVerified;
 
     @PrePersist
     protected void onCreate() {

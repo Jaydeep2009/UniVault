@@ -57,7 +57,7 @@ public class SecurityConfig {
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/auth/signup", "/auth/login", "/providers/google/callback", "/providers/google/authorize").permitAll()
+                        .requestMatchers("/auth/signup", "/auth/login", "/auth/google", "/providers/google/callback", "/providers/google/authorize").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);

@@ -40,6 +40,7 @@ public class AuthController {
         // "sign in with Google" for the platform login, not the Drive connection).
         // Flag this to the team if a dedicated enum is wanted instead.
         user.setAuthType(AuthType.STATIC_KEY);
+        user.setEmailVerified(false);  // Email/password users start unverified
 
         userRepository.save(user);
 

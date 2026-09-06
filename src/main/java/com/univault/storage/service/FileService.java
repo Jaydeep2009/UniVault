@@ -10,6 +10,8 @@ import com.univault.upload.entity.FileEntity;
 import com.univault.upload.enums.FileStatus;
 import com.univault.repository.ChunkRepository;
 import com.univault.upload.repository.FileRepository;
+import com.univault.service.ActivityLogService;
+import com.univault.entity.ActivityLog;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -29,6 +31,7 @@ public class FileService {
     private final ChunkRepository chunkRepository;
     private final StorageProviderAccountRepository accountRepository;
     private final ProviderFactory providerFactory;
+    private final ActivityLogService activityLogService;
 
     /**
      * List all files for a user (excluding deleted files).
@@ -62,7 +65,22 @@ public class FileService {
         }
 
         file.setStatus(FileStatus.READY);
-        return fileRepository.save(file);
+        FileEntity restored = fileRepository.save(file);
+        
+        // Log activity
+        activityLogService.logActivity(
+                userId,
+                ActivityLog.ActivityType.RESTORE,
+                "Restored 1 file",
+                file.getName(),
+                "file",
+                file.getId(),
+                "UniVault",
+                null,
+                "Restored from trash"
+        );
+        
+        return restored;
     }
 
     /**
@@ -128,6 +146,19 @@ public class FileService {
         // Simply mark as deleted - chunks stay intact
         file.setStatus(FileStatus.DELETED);
         fileRepository.save(file);
+
+        // Log activity
+        activityLogService.logActivity(
+                userId,
+                ActivityLog.ActivityType.DELETE,
+                "Deleted 1 file",
+                file.getName(),
+                "file",
+                file.getId(),
+                "UniVault",
+                null,
+                "Moved to trash"
+        );
 
         log.info("File {} soft deleted (chunks preserved for restore)", fileId);
     }
